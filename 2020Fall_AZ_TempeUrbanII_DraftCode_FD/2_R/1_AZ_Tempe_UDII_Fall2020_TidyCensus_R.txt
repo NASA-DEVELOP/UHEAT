@@ -1,0 +1,589 @@
+########################################################################
+#                                   ROUTINE 
+#                   AZ_Tempe_UDII_Fall2020_Tidycensus
+#-----------------------------------------------------------------------
+#
+# Description: This first part of this routine extracts and processes socio-economic 
+#             variables from American Census Survey (ACS) by census tract or block group for
+#             the city of Tempe and saves them to a csv file. The variables produced
+#             match those included from previous literature.  
+#             Finally the data set are merged and saved in a common csv file.
+#             
+#             Users can define year, census type, working directory, and geography. 
+#             
+#             NOTE: the code take ~10 minutes to run 
+# Code Requirements: This script requires installation of "tidyverse","tidycensus","foreign","sf" 
+#                    See the Setup libraries section for more info.
+#
+# Created by: Lance Watkins, Ph.D. School of Geographical Sciences and Urban Planning
+#             Arizona State University
+#
+# Modified by: Blake A Steiner
+# Date created: Oct. 15, 2020
+# History:  
+#           Oct. 15, 2020 - bas - created to extract census data from tidy census
+#           Oct. 22, 2020 - bas - modified code to fit context of Tempe
+#           Oct. 29, 2020 - bas - Reran code for testing and edited it
+########################################################################
+
+############################
+#Setup libraries 
+############################
+
+
+# Retrieve your personal API key from 
+# http://api.census.gov/data/key_signup.html
+
+#specify the packages of interest
+packages = c("tidyverse","tidycensus","foreign","sf")
+
+### Run this if these packages are not installed on the computer
+install.packages(c("tidyverse","tidycensus","foreign","sf"))
+
+#Activate the packages
+library("tidyverse")
+library("tidycensus")
+library("foreign")
+library("sf") #In case you want to map variables in R
+
+
+
+############################
+# TIPS
+############################
+
+
+## Additional Links for working with tidy census and census data in R
+
+#Using tidycensus: https://walkerke.github.io/tidycensus/articles/basic-usage.html#geography-in-tidycensus
+# 1) https://www.census.gov/programs-surveys/acs/technical-documentation/code-lists.html 
+# 1a) Instructions on calculating margin of error for ACS variables that were calculated from existing ACS variables, 
+# 1a) follow link under "Instructions for Applying Statistical Testing"
+# 2) Census Data Explorer: https://data.census.gov/cedsci/?q=United%20States
+# 2a) You can use this to explore the census data through and API. It can be useful reference when working with tidy census
+
+
+  
+############################
+# Set your environment
+############################
+
+#Insert your key here
+api_key <- "932542937891181aefcc10fc8b470582a9511284" #My API Key
+census_api_key(api_key, install = TRUE, overwrite = TRUE)
+
+readRenviron("~/.Renviron")
+Sys.getenv("CENSUS_API_KEY")
+
+#Geography type, choose between "tract" or "block group"
+geo <- 'tract'
+
+#census year or acs year
+year <- 2018 
+
+#what type of data you want to pull, see ?load_variables for more info
+type <- "acs5"
+
+#Set your working directory
+
+setwd("D:/AZ_Fall2020/R_Scripts/Input_R")
+
+#Pull region in question boundaries (tracts or blocks)
+region_bg_ID <- as.character(read.dbf("./2020Fall_AZ_Tempe_CT.dbf")$GEOID)
+  
+#In case your dbf file does not have 0's in front of the GEOID to match properly:
+region_bg_ID <- c("04013318800", "04013319101", "04013318900", "04013319000",
+               "04013319403", "04013319703", "04013319404", "04013319500",
+               "04013319704", "04013319600", "04013319103", "04013319104", 
+               "04013319201", "04013319202", "04013319705", "04013319706",
+               "04013320100", "04013810000", "04013810100", "04013319800",
+               "04013319902", "04013319903", "04013319904", "04013319905",
+               "04013319906", "04013319910", "04013320001", "04013319908",
+               "04013319909", "04013320007", "04013318400", "04013318700",
+               "04013319300", "04013319401", "04013319402", "04013319907",
+               "04013318501")
+
+############################
+# Data time!
+############################
+
+v18 <- load_variables(year, #Year or ending year of 5 year ACS
+                      type, #acs or decennial census
+                      cache = TRUE) # Load all the ACS variables for the 5-year ACS from 2014-2018
+
+View(v18) #Will bring up the dataframe with all the ACS variables for the dataset we pulled. Useful reference
+
+
+#Creating a new data frame that will serve as the data frame to store subset data and ACS variables
+output.df <- as.data.frame(region_bg_ID)
+colnames(output.df) <- "GEOID"
+
+
+############################
+# Total Population (number of people)
+############################
+
+## Total Population
+totPop <- "B01003_001"
+
+TOTALPOP <- get_acs(geography = geo, #or block group 
+                    variables = c(totPop),  #which variable would you like
+                    state = "AZ", #state abbreviations
+                    county = "Maricopa", #county level
+                    output = "wide") #choice between long or wide
+
+#Filter variable to your GEOIDs
+TOTALPOP <- TOTALPOP[TOTALPOP$GEOID %in% region_bg_ID,] 
+
+## Change the column names s
+colnames(TOTALPOP) <- c("GEOID","NAME","TOTALPOP_E","TOTALPOP_M")
+
+## Estimating Standard Error (SE) and Coeeficient of Variation (CV)
+## SE = MOE / 1.645
+## CV = (SE / E)*100
+## CV is expressed as a percent
+TOTALPOP$TOTALPOP_SE <- TOTALPOP$TOTALPOP_M / 1.645
+TOTALPOP$TOTALPOP_CV <- (TOTALPOP$TOTALPOP_SE / TOTALPOP$TOTALPOP_E)*100
+
+
+## Create a new data frame with the same number of rows
+output.df <- base::merge(output.df,TOTALPOP[c("GEOID","TOTALPOP_E","TOTALPOP_SE","TOTALPOP_CV")],
+                   by="GEOID") 
+
+## Calculation of HVI variables. Some variables require greater computation than others ##
+
+
+############################
+# Total Median income ($)
+############################
+
+##Total median income in the last 12 months (2018)
+
+medinc <- "B19326_001"
+
+TOTALINC <- get_acs(geography = geo, #or block group 
+                    variables = c(medinc),  #which variable would you like
+                    state = "AZ", #state abbreviations
+                    county = "Maricopa", #county level
+                    output = "wide") #choice between long or wide
+
+#Filter variable to your GEOIDs
+TOTALINC <- TOTALINC[TOTALINC$GEOID %in% region_bg_ID,] 
+
+## Change the column names s
+colnames(TOTALINC) <- c("GEOID","NAME","TOTALINC_E","TOTALINC_M")
+
+## Estimating Standard Error (SE) and Coefficient of Variation (CV)
+## SE = MOE / 1.645
+## CV = (SE / E)*100
+## CV is expressed as a percent
+TOTALINC$TOTALINC_SE <- TOTALINC$TOTALINC_M / 1.645
+TOTALINC$TOTALINC_CV <- (TOTALINC$TOTALINC_SE / TOTALINC$TOTALINC_E)*100
+
+
+## Create a new data frame with the same number of rows
+output.df <- merge(output.df,TOTALINC[c("GEOID","TOTALINC_E","TOTALINC_SE","TOTALINC_CV")],
+                   by="GEOID") 
+
+
+############################
+# Ethnic Minority (%)
+############################
+
+## Ethnic Minority
+totPopEthnicity <- "B03002_001"
+totWhiteOnlynotHisp <- "B03002_003"
+
+Qminority <- get_acs(geography = 'tract', 
+                     variables = c(totPopEthnicity,totWhiteOnlynotHisp), 
+                     state = "AZ",
+                     county = "Maricopa",
+                     output = 'wide')
+
+Qminority <- Qminority[Qminority$GEOID %in% region_bg_ID,]
+colnames(Qminority) <- c("GEOID","NAME","totPopEthnic_E","totPopEthnic_M","totWhiteOnly_E","totWhiteOnly_M")
+Qminority$totMinority_E <- Qminority$totPopEthnic_E - Qminority$totWhiteOnly_E
+
+
+## Cutter et al changed estimates of 0 to 1 for calculations to work. 
+#Full citation: Cutter, S. L., Boruff, B. J., & Shirley, W. L. (2003). Social Vulnerability to Environmental Hazards n. In 699Social Science Quarterly (Vol. 84). https://doi.org/10.1111/1540-6237.8402002
+
+
+Qminority$totPopEthnic_E[Qminority$totPopEthnic_E== 0] <- 1
+Qminority$totWhiteOnly_E[Qminority$totWhiteOnly_E == 0] <- 1
+Qminority$totMinority_E[Qminority$totMinority_E == 0] <- 1
+
+
+Qminority$Qminority_E <- (Qminority$totMinority_E / Qminority$totPopEthnic_E)*100
+Qminority$Qminority_p <- Qminority$totMinority_E / Qminority$totPopEthnic_E
+Qminority$totMinority_SE <- sqrt((Qminority$totPopEthnic_M/1.645)^2 + (Qminority$totWhiteOnly_M/1.645)^2)
+Qminority$totPopEthnic_SE <- Qminority$totPopEthnic_M/1.645
+
+Qminority$SEp_first_sqrt <- (Qminority$totMinority_SE^2) - ((Qminority$Qminority_p^2)*(Qminority$totPopEthnic_SE^2))
+Qminority$Qminority_SE <- NA
+
+#Function to estimate error for the ACS assessments
+for(x in 1:dim(Qminority)[1]){
+  if(Qminority$Qminority_p[x] == 1){
+    Qminority$Qminority_SE[x] <- (Qminority$totMinority_SE[x] / Qminority$totPopEthnic_E[x])*100}
+  if(Qminority$Qminority_p[x] != 1 & Qminority$SEp_first_sqrt[x] < 0){
+    Qminority$Qminority_SE[x] <- (sqrt((Qminority$totMinority_SE[x]^2) + ((Qminority$Qminority_p[x]^2)*(Qminority$totPopEthnic_SE[x]^2)))/Qminority$totPopEthnic_E[x])*100}
+  if(Qminority$Qminority_p[x] != 1 & Qminority$SEp_first_sqrt[x] > 0){
+    Qminority$Qminority_SE[x] <- (sqrt((Qminority$totMinority_SE[x]^2) - ((Qminority$Qminority_p[x]^2)*(Qminority$totPopEthnic_SE[x]^2)))/Qminority$totPopEthnic_E[x])*100}
+}
+
+Qminority$Qminority_CV <- (Qminority$Qminority_SE / Qminority$Qminority_E)*100
+output.df <- merge(output.df,Qminority[,c("GEOID","Qminority_E","Qminority_SE","Qminority_CV")],
+                   by="GEOID")
+
+############################
+# Below Poverty line (%)
+############################
+
+## < Poverty line
+## ACS Concept (ACS Table B17021): Poverty Status of Individuals in the Past 12 Months by Living Arrangement
+## ACS Variable: B17021_001 = Total Population (individual), B17021_002 = Total Pop with income below poverty level
+
+totPopPoverty <- "B17021_001"
+totBelowPoverty <- "B17021_002"
+
+Qpoverty <- get_acs(geography = geo, 
+                    variables = c(totPopPoverty,totBelowPoverty), 
+                    state = "AZ",
+                    county = "Maricopa",
+                    output = 'wide')
+
+Qpoverty <- Qpoverty[Qpoverty$GEOID %in% region_bg_ID,]
+colnames(Qpoverty) <- c("GEOID","NAME","totPopPoverty_E","totPopPoverty_M","totBelowPoverty_E","totBelowPoverty_M")
+
+## Cutter et al changed estimates of 0 to 1 for calculations to work. 
+Qpoverty$totPopPoverty_E[Qpoverty$totPopPoverty_E == 0] <- 1
+Qpoverty$totBelowPoverty_E[Qpoverty$totBelowPoverty_E == 0] <- 1
+
+Qpoverty$Qpoverty_E <- (Qpoverty$totBelowPoverty_E / Qpoverty$totPopPoverty_E)*100
+Qpoverty$Qpoverty_p <- Qpoverty$totBelowPoverty_E / Qpoverty$totPopPoverty_E
+
+Qpoverty$totBelowPoverty_SE <- Qpoverty$totBelowPoverty_M/1.645
+Qpoverty$totPopPoverty_SE <- Qpoverty$totPopPoverty_M/1.645
+
+
+Qpoverty$SEp_first_sqrt <- (Qpoverty$totBelowPoverty_SE^2) - ((Qpoverty$Qpoverty_p^2)*(Qpoverty$totPopPoverty_SE^2))
+Qpoverty$Qpoverty_SE <- NA
+
+#Function to estimate error
+for(x in 1:dim(Qpoverty)[1]){
+  if(Qpoverty$Qpoverty_p[x] == 1){
+    Qpoverty$Qpoverty_SE[x] <- (Qpoverty$totBelowPoverty_SE[x] / Qpoverty$totPopPoverty_E[x])*100}
+  if(Qpoverty$Qpoverty_p[x] != 1 & Qpoverty$SEp_first_sqrt[x] < 0){
+    Qpoverty$Qpoverty_SE[x] <- (sqrt((Qpoverty$totBelowPoverty_SE[x]^2) + ((Qpoverty$Qpoverty_p[x]^2)*(Qpoverty$totPopPoverty_SE[x]^2)))/Qpoverty$totPopPoverty_E[x])*100}
+  if(Qpoverty$Qpoverty_p[x] != 1 & Qpoverty$SEp_first_sqrt[x] > 0){
+    Qpoverty$Qpoverty_SE[x] <- (sqrt((Qpoverty$totBelowPoverty_SE[x]^2) - ((Qpoverty$Qpoverty_p[x]^2)*(Qpoverty$totPopPoverty_SE[x]^2)))/Qpoverty$totPopPoverty_E[x])*100}
+}
+
+Qpoverty$Qpoverty_CV <- (Qpoverty$Qpoverty_SE / Qpoverty$Qpoverty_E)*100
+output.df <- merge(output.df,Qpoverty[,c("GEOID","Qpoverty_E","Qpoverty_SE","Qpoverty_CV")],
+                   by="GEOID")
+
+############################
+# Adults without a high school diploma (%)
+############################
+
+## No HS diploma
+## Census Concept: Educational Attainment for the Population 25 Years and Over (Census Table B15003)
+
+totPopEdu <- "B15003_001"
+QNoHSDip_IDs <- c("B15003_002","B15003_003","B15003_004","B15003_005","B15003_006","B15003_007","B15003_008","B15003_009",
+                  "B15003_010","B15003_011","B15003_012","B15003_013","B15003_014","B15003_015","B15003_016")
+
+v18_QNoHSDip <- v18[v18$name %in% c(totPopEdu,QNoHSDip_IDs),]
+QNoHSDip <- get_acs(geography = geo, 
+                    variables = c(totPopEdu,QNoHSDip_IDs), 
+                    state = "AZ",
+                    county = "Maricopa",
+                    output = 'wide')
+
+QNoHSDip <- QNoHSDip[QNoHSDip$GEOID %in% region_bg_ID,]
+
+QNoHSDip$totNoHSDip_E <- apply(QNoHSDip[,c(paste0(QNoHSDip_IDs,"E"))],1,sum)
+
+
+## Cutter et al changed estimates of 0 to 1 for calculations to work. 
+QNoHSDip$B15003_001E[QNoHSDip$B15003_001E == 0] <- 1
+QNoHSDip$totNoHSDip_E[QNoHSDip$totNoHSDip_E == 0] <- 1
+
+## Cutter et al changed NA MOE values to 0 for calculations to work.
+
+QNoHSDip$QNoHSDip_E <- (QNoHSDip$totNoHSDip_E/QNoHSDip$B15003_001E)*100
+QNoHSDip_MIDs <- subset(colnames(QNoHSDip), grepl("^.+(M)$", colnames(QNoHSDip))) #This creates a vector to subset the data by the grepl function
+QNoHSDip[QNoHSDip_MIDs ][is.na(QNoHSDip[QNoHSDip_MIDs])] <- 0 #this uses the subset vector created above to make any NAs it found to be 0. 
+summary(QNoHSDip[QNoHSDip_MIDs]) # Check to make sure there are no NAs in the MOE estimates
+
+colnames(QNoHSDip)[colnames(QNoHSDip) == c("B15003_001E","B15003_001M")] <- c("totPopEdu_E","totPopEdu_M")
+
+## Estimating Standard Error according to Census
+## Source: https://www2.census.gov/programs-surveys/acs/tech_docs/statistical_testing/2016StatisticalTesting5year.pdf?#
+## 
+## p = sumQNoHSDip_IDs / B01003_001E
+## totPop_SE = totPop_M / 1.645
+## totNoHSDip_SE = sqrt(SE(B15002_003M)^2 + SE(B15002_004M)^2 + ... SE(B15002_026M))
+
+## SE(p) = (1/totPop_E) * sqrt((totNoHSDip_SE^2) - (p^2 * (totPop_SE^2)))
+## If the value under the sqrt is negative then use the following equation to calculate SE instead.
+## SE(p) = (1/totPop_E) * sqrt((totNoHSDip_SE^2) + (p^2 * (totPop_SE^2)))
+## If p = 1 then use the following to calculate SE 
+## SE(p) = totNoHSDip_SE / totPop_E
+
+
+QNoHSDip$QNoHSDip_p <- QNoHSDip$totNoHSDip_E/QNoHSDip$totPopEdu_E
+QNoHSDip$totPopEdu_SE <- QNoHSDip$totPopEdu_M / 1.645
+QNoHSDip$totNoHSDip_SE <- sqrt((QNoHSDip$B15003_002M/1.645)^2 + (QNoHSDip$B15003_003M/1.645)^2 + (QNoHSDip$B15003_004M/1.645)^2 + (QNoHSDip$B15003_005M/1.645)^2 + (QNoHSDip$B15003_006M/1.645)^2 + (QNoHSDip$B15003_007M/1.645)^2 + (QNoHSDip$B15003_008M/1.645)^2 + (QNoHSDip$B15003_009M/1.645)^2 + (QNoHSDip$B15003_010M/1.645)^2 + (QNoHSDip$B15003_011M/1.645)^2 + (QNoHSDip$B15003_012M/1.645)^2 + (QNoHSDip$B15003_013M/1.645)^2 + (QNoHSDip$B15003_014M/1.645)^2 + (QNoHSDip$B15003_015M/1.645)^2 + (QNoHSDip$B15003_016M/1.645)^2)
+
+QNoHSDip$SEp_first_sqrt <- (QNoHSDip$totNoHSDip_SE^2) - ((QNoHSDip$QNoHSDip_p^2)*(QNoHSDip$totPopEdu_SE^2))
+QNoHSDip$QNoHSDip_SE <- NA
+
+for(x in 1:dim(QNoHSDip)[1]){
+  if(QNoHSDip$QNoHSDip_p[x] == 1){
+    QNoHSDip$QNoHSDip_SE[x] <- (QNoHSDip$totNoHSDip_SE[x] / QNoHSDip$totPopEdu_E[x])*100}
+  if(QNoHSDip$QNoHSDip_p[x] != 1 & QNoHSDip$SEp_first_sqrt[x] < 0){
+    QNoHSDip$QNoHSDip_SE[x] <- (sqrt((QNoHSDip$totNoHSDip_SE[x]^2) + ((QNoHSDip$QNoHSDip_p[x]^2)*(QNoHSDip$totPopEdu_SE[x]^2)))/QNoHSDip$totPopEdu_E[x])*100}
+  if(QNoHSDip$QNoHSDip_p[x] != 1 & QNoHSDip$SEp_first_sqrt[x] > 0){
+    QNoHSDip$QNoHSDip_SE[x] <- (sqrt((QNoHSDip$totNoHSDip_SE[x]^2) - ((QNoHSDip$QNoHSDip_p[x]^2)*(QNoHSDip$totPopEdu_SE[x]^2)))/QNoHSDip$totPopEdu_E[x])*100}
+}
+
+QNoHSDip$QNoHSDip_CV <- (QNoHSDip$QNoHSDip_SE / QNoHSDip$QNoHSDip_E)*100
+output.df <- merge(output.df,QNoHSDip[,c("GEOID","QNoHSDip_E","QNoHSDip_SE","QNoHSDip_CV")],
+                   by="GEOID")
+
+
+############################
+# Over 65 years old (%)
+############################
+
+## >= 65 years of age
+totPopSex <- "B01001_001"
+Qsenior_IDs <- c("B01001_020", "B01001_021", "B01001_022", "B01001_023", "B01001_024", "B01001_025", "B01001_044", "B01001_045", "B01001_046", "B01001_047", "B01001_048", "B01001_049")
+
+Qsenior <- get_acs(geography = geo, 
+                   variables = c(totPopSex,Qsenior_IDs), 
+                   state = "AZ",
+                   county = "Maricopa",
+                   output = 'wide')
+
+
+Qsenior <- Qsenior[Qsenior$GEOID %in% region_bg_ID,]
+v18_Qsenior <- v18[v18$name %in% c(totPopSex,Qsenior_IDs),]
+
+
+Qsenior$totSenior_E <- apply(Qsenior[,c(paste0(Qsenior_IDs,"E"))],1,sum)
+
+
+## Cutter et al changed estimates of 0 to 1 for calculations to work. 
+Qsenior$B01001_001E[Qsenior$B01001_001E== 0] <- 1
+Qsenior$totSenior_E[Qsenior$totSenior_E == 0] <- 1
+
+## Cutter et al changed NA MOE values to 0 for calculations to work.
+
+Qsenior$Qsenior_E <- (Qsenior$totSenior_E/Qsenior$B01001_001E)*100
+Qsenior_MIDs <- subset(colnames(Qsenior), grepl("^.+(M)$", colnames(Qsenior)))
+Qsenior[Qsenior_MIDs ][is.na(Qsenior[Qsenior_MIDs])] <- 0
+summary(Qsenior[Qsenior_MIDs]) # Check to make sure there are no NAs in the MOE estimates
+
+colnames(Qsenior)[colnames(Qsenior) == c("B01001_001E","B01001_001M")] <- c("totPopSex_E","totPopSex_M")
+
+## Estimating Standard Error according to Census
+## Source: https://www2.census.gov/programs-surveys/acs/tech_docs/statistical_testing/2016StatisticalTesting5year.pdf?#
+## 
+## p = sumQsenior_IDs / B01003_001E
+## totPop_SE = totPop_M / 1.645
+## totSenior_SE = sqrt(SE(B15002_003M)^2 + SE(B15002_004M)^2 + ... SE(B15002_026M))
+
+## SE(p) = (1/totPop_E) * sqrt((totSenior_SE^2) - (p^2 * (totPop_SE^2)))
+## If the value under the sqrt is negative then use the following equation to calculate SE instead.
+## SE(p) = (1/totPop_E) * sqrt((totSenior_SE^2) + (p^2 * (totPop_SE^2)))
+## If p = 1 then use the following to calculate SE 
+## SE(p) = totSenior_SE / totPop_E
+
+
+Qsenior$Qsenior_p <- Qsenior$totSenior_E/Qsenior$totPopSex_E
+Qsenior$totPopSex_SE <- Qsenior$totPopSex_M / 1.645
+Qsenior$totSenior_SE <- sqrt((Qsenior$B01001_020M/1.645)^2 + (Qsenior$B01001_021M/1.645)^2 + (Qsenior$B01001_022M/1.645)^2 + (Qsenior$B01001_023M/1.645)^2 + (Qsenior$B01001_024M/1.645)^2 + (Qsenior$B01001_025M/1.645)^2 + (Qsenior$B01001_044M/1.645)^2 + (Qsenior$B01001_045M/1.645)^2 + (Qsenior$B01001_046M/1.645)^2 + (Qsenior$B01001_047M/1.645)^2 + (Qsenior$B01001_048M/1.645)^2 + (Qsenior$B01001_049M/1.645)^2)
+
+Qsenior$SEp_first_sqrt <- (Qsenior$totSenior_SE^2) - ((Qsenior$Qsenior_p^2)*(Qsenior$totPopSex_SE^2))
+Qsenior$Qsenior_SE <- NA
+
+for(x in 1:dim(Qsenior)[1]){
+  if(Qsenior$Qsenior_p[x] == 1){
+    Qsenior$Qsenior_SE[x] <- (Qsenior$totSenior_SE[x] / Qsenior$totPopSex_E[x])*100}
+  if(Qsenior$Qsenior_p[x] != 1 & Qsenior$SEp_first_sqrt[x] < 0){
+    Qsenior$Qsenior_SE[x] <- (sqrt((Qsenior$totSenior_SE[x]^2) + ((Qsenior$Qsenior_p[x]^2)*(Qsenior$totPopSex_SE[x]^2)))/Qsenior$totPopSex_E[x])*100}
+  if(Qsenior$Qsenior_p[x] != 1 & Qsenior$SEp_first_sqrt[x] > 0){
+    Qsenior$Qsenior_SE[x] <- (sqrt((Qsenior$totSenior_SE[x]^2) - ((Qsenior$Qsenior_p[x]^2)*(Qsenior$totPopSex_SE[x]^2)))/Qsenior$totPopSex_E[x])*100}
+}
+
+#Coefficient of variation 
+Qsenior$Qsenior_CV <- (Qsenior$Qsenior_SE / Qsenior$Qsenior_E)*100
+
+output.df <- merge(output.df, Qsenior[,c("GEOID","Qsenior_E","Qsenior_SE","Qsenior_CV")],
+                   by="GEOID")
+
+############################
+# 65 years old of age and living alone (%)
+############################
+
+## >= 65 years of age & living alone
+## ACS Concept: Relationship By Household Type (Including Living Alone) For The Population 65 Years and Over (ACS Table B09020)
+## ACS Variable: Female Over 64 Living Alone = 09020_018, Male Over 64 Living Alone = B09020_015, Total Population (By Sex Category) = B01001_001
+totPopbySex <- "B01001_001"
+totLivingAloneOver64_IDs <- c("B09020_015","B09020_018")
+
+QseniorAlone <- get_acs(geography = geo, 
+                        variables = c(totPopbySex,totLivingAloneOver64_IDs), 
+                        state = "AZ",
+                        county = "Maricopa",
+                        output = 'wide')
+
+QseniorAlone <- QseniorAlone[QseniorAlone$GEOID %in% region_bg_ID,]
+
+
+QseniorAlone$totLivingAloneOver64_E <- apply(QseniorAlone[,c(paste0(totLivingAloneOver64_IDs,"E"))],1,sum)
+
+
+## Cutter et al changed estimates of 0 to 1 for calculations to work. 
+QseniorAlone$B01001_001E[QseniorAlone$B01001_001E== 0] <- 1
+QseniorAlone$totLivingAloneOver64_E[QseniorAlone$totLivingAloneOver64_E == 0] <- 1
+
+## Cutter et al changed NA MOE values to 0 for calculations to work.
+
+QseniorAlone$QseniorAlone_E <- (QseniorAlone$totLivingAloneOver64_E/QseniorAlone$B01001_001E)*100
+QseniorAlone_MIDs <- subset(colnames(QseniorAlone), grepl("^.+(M)$", colnames(QseniorAlone)))
+QseniorAlone[QseniorAlone_MIDs][is.na(QseniorAlone[QseniorAlone_MIDs])] <- 0
+summary(QseniorAlone[QseniorAlone_MIDs]) # Check to make sure there are no NAs in the MOE estimates
+
+colnames(QseniorAlone)[colnames(QseniorAlone) == c("B01001_001E","B01001_001M")] <- c("totPopbySex_E","totPopbySex_M")
+
+## Estimating Standard Error according to Census
+## Source: https://www2.census.gov/programs-surveys/acs/tech_docs/statistical_testing/2016StatisticalTesting5year.pdf?#
+## 
+## p = sumQseniorAlone_IDs / B01003_001E
+## totPop_SE = totPop_M / 1.645
+## totLivingAloneOver64_SE = sqrt(SE(B15002_003M)^2 + SE(B15002_004M)^2 + ... SE(B15002_026M))
+
+## SE(p) = (1/totPop_E) * sqrt((totLivingAloneOver64_SE^2) - (p^2 * (totPop_SE^2)))
+## If the value under the sqrt is negative then use the following equation to calculate SE instead.
+## SE(p) = (1/totPop_E) * sqrt((totLivingAloneOver64_SE^2) + (p^2 * (totPop_SE^2)))
+## If p = 1 then use the following to calculate SE 
+## SE(p) = totLivingAloneOver64_SE / totPop_E
+
+
+QseniorAlone$QseniorAlone_p <- QseniorAlone$totLivingAloneOver64_E/QseniorAlone$totPopbySex_E
+QseniorAlone$totPopbySex_SE <- QseniorAlone$totPopbySex_M / 1.645
+QseniorAlone$totLivingAloneOver64_SE <- sqrt((QseniorAlone$B09020_015M/1.645)^2 + (QseniorAlone$B09020_018M/1.645)^2) 
+
+QseniorAlone$SEp_first_sqrt <- (QseniorAlone$totLivingAloneOver64_SE^2) - ((QseniorAlone$QseniorAlone_p^2)*(QseniorAlone$totPopbySex_SE^2))
+QseniorAlone$QseniorAlone_SE <- NA
+
+for(x in 1:dim(QseniorAlone)[1]){
+  if(QseniorAlone$QseniorAlone_p[x] == 1){
+    QseniorAlone$QseniorAlone_SE[x] <- (QseniorAlone$totLivingAloneOver64_SE[x] / QseniorAlone$totPopbySex_E[x])*100}
+  if(QseniorAlone$QseniorAlone_p[x] != 1 & QseniorAlone$SEp_first_sqrt[x] < 0){
+    QseniorAlone$QseniorAlone_SE[x] <- (sqrt((QseniorAlone$totLivingAloneOver64_SE[x]^2) + ((QseniorAlone$QseniorAlone_p[x]^2)*(QseniorAlone$totPopbySex_SE[x]^2)))/QseniorAlone$totPopbySex_E[x])*100}
+  if(QseniorAlone$QseniorAlone_p[x] != 1 & QseniorAlone$SEp_first_sqrt[x] > 0){
+    QseniorAlone$QseniorAlone_SE[x] <- (sqrt((QseniorAlone$totLivingAloneOver64_SE[x]^2) - ((QseniorAlone$QseniorAlone_p[x]^2)*(QseniorAlone$totPopbySex_SE[x]^2)))/QseniorAlone$totPopbySex_E[x])*100}
+}
+
+QseniorAlone$QseniorAlone_CV <- (QseniorAlone$QseniorAlone_SE / QseniorAlone$QseniorAlone_E)*100
+output.df <- merge(output.df,QseniorAlone[,c("GEOID","QseniorAlone_E","QseniorAlone_SE","QseniorAlone_CV")],by="GEOID")
+
+
+############################
+# Living alone (%)
+############################
+
+## Living alone
+## ACS Concept: Household Type (Including Living Alone) By Relationship (ACS Table: B09019)
+## ACS Variable: Female Living Alone = B09019_030, Male Living Alone = B09019_027, Estimate!!Total (total population) = B09019_001
+
+totPop <- "B09019_001"
+totLivingAlone <- c("B09019_030", "B09019_027")
+
+Qalone <- get_acs(geography = geo, 
+                  variables = c(totPop,totLivingAlone), 
+                  state = "AZ",
+                  county = "Maricopa",
+                  output = 'wide')
+
+Qalone <- Qalone[Qalone$GEOID %in% region_bg_ID,]
+
+Qalone$totLivingAlone_E <- apply(Qalone[,c(paste0(totLivingAlone,"E"))],1,sum)
+
+
+## Cutter et al changed estimates of 0 to 1 for calculations to work. 
+Qalone$B09019_001E[Qalone$B09019_001E== 0] <- 1
+Qalone$totLivingAlone_E[Qalone$totLivingAlone_E == 0] <- 1
+
+## Cutter et al changed NA MOE values to 0 for calculations to work.
+Qalone$Qalone_E <- (Qalone$totLivingAlone_E/Qalone$B09019_001E)*100
+Qalone_MIDs <- subset(colnames(Qalone), grepl("^.+(M)$", colnames(Qalone)))
+Qalone[Qalone_MIDs][is.na(Qalone[Qalone_MIDs])] <- 0
+summary(Qalone[Qalone_MIDs]) # Check to make sure there are no NAs in the MOE estimates
+
+colnames(Qalone)[colnames(Qalone) == c("B09019_001E","B09019_001M")] <- c("totPop_E","totPop_M")
+
+## Estimating Standard Error according to Census
+## Source: https://www2.census.gov/programs-surveys/acs/tech_docs/statistical_testing/2016StatisticalTesting5year.pdf?#
+## 
+## p = sumQalone_IDs / B01003_001E
+## totPop_SE = totPop_M / 1.645
+## totLivingAlone_SE = sqrt(SE(B15002_003M)^2 + SE(B15002_004M)^2 + ... SE(B15002_026M))
+
+## SE(p) = (1/totPop_E) * sqrt((totLivingAlone_SE^2) - (p^2 * (totPop_SE^2)))
+## If the value under the sqrt is negative then use the following equation to calculate SE instead.
+## SE(p) = (1/totPop_E) * sqrt((totLivingAlone_SE^2) + (p^2 * (totPop_SE^2)))
+## If p = 1 then use the following to calculate SE 
+## SE(p) = totLivingAlone_SE / totPop_E
+
+
+Qalone$Qalone_p <- Qalone$totLivingAlone_E/Qalone$totPop_E
+Qalone$totPop_SE <- Qalone$totPop_M / 1.645
+Qalone$totLivingAlone_SE <- sqrt((Qalone$B09019_030M/1.645)^2 + (Qalone$B09019_027M/1.645)^2) 
+
+Qalone$SEp_first_sqrt <- (Qalone$totLivingAlone_SE^2) - ((Qalone$Qalone_p^2)*(Qalone$totPop_SE^2))
+Qalone$Qalone_SE <- NA
+
+for(x in 1:dim(Qalone)[1]){
+  if(Qalone$Qalone_p[x] == 1){
+    Qalone$Qalone_SE[x] <- (Qalone$totLivingAlone_SE[x] / Qalone$totPop_E[x])*100}
+  if(Qalone$Qalone_p[x] != 1 & Qalone$SEp_first_sqrt[x] < 0){
+    Qalone$Qalone_SE[x] <- (sqrt((Qalone$totLivingAlone_SE[x]^2) + ((Qalone$Qalone_p[x]^2)*(Qalone$totPop_SE[x]^2)))/Qalone$totPop_E[x])*100}
+  if(Qalone$Qalone_p[x] != 1 & Qalone$SEp_first_sqrt[x] > 0){
+    Qalone$Qalone_SE[x] <- (sqrt((Qalone$totLivingAlone_SE[x]^2) - ((Qalone$Qalone_p[x]^2)*(Qalone$totPop_SE[x]^2)))/Qalone$totPop_E[x])*100}
+}
+
+Qalone$Qalone_CV <- (Qalone$Qalone_SE / Qalone$Qalone_E)*100
+
+output.df <- merge(output.df,Qalone[,c("GEOID","Qalone_E","Qalone_SE","Qalone_CV")],
+                   by="GEOID")
+
+############################
+# Quality Control and Outputs
+############################
+
+## Select and remove rows with NA
+output.na <- which(is.na(output.df), arr.ind = TRUE)
+unique.output.na <- unique(output.na[,1])
+output.GEOID.rm <- output.df[unique.output.na,]$GEOID
+output.nonas <- output.df[!(output.df$GEOID %in% output.GEOID.rm), ]
+
+
+## Seperate CV and E columns
+output.CV <- output.nonas %>%  dplyr::select(-ends_with("_E"))
+output.CV <- output.CV %>% dplyr::select(-ends_with("_SE"))
+
+output.E <- output.nonas %>% dplyr::select(-ends_with("_CV"))
+output.E <- output.E %>% dplyr::select(-ends_with("_SE"))
+
+
+## Write out new csv files to local machine
+write_csv(output.nonas, paste("/AZ_Fall2020/R_Scripts/Output_R/TMP_UHEAT_CENSUS_VARIABLES", year, type, "CT_ALLVariables_ALLMetrics", paste(Sys.Date(),".csv",sep=""),sep = "_"))
+write_csv(output.CV,paste("/AZ_Fall2020/R_Scripts/Output_R/TMP_UHEAT_CENSUS_VARIABLES", year, type, "CT_ALLVariables_CV", paste(Sys.Date(),".csv",sep=""),sep = "_"))
+write_csv(output.E, paste("/AZ_Fall2020/R_Scripts/Output_R/TMP_UHEAT_CENSUS_VARIABLES", year, type, "CT_ALLVariables_E", paste(Sys.Date(),".csv",sep=""),sep = "_"))

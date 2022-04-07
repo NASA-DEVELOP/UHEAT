@@ -1,0 +1,221 @@
+//SCRIPT DESCRIPTION//
+
+/* Script: Fall2020_AZ_TempeII_SatMonthly - Tempe Urban Development II - Collection and Processing by month
+
+Authors: Blake Steiner, John Dialesandro, Anson Pang, and Sydney Boogaard 
+Prior Authors: Brandy Nisbet-Wilcox, Samuel Meltzer, Spencer Nelson, Charlotte Wagner
+Date: 11/3/2020
+Project: Tempe Urban Development II, Fall 2020
+Node: Arizona, Tempe
+Contact: Blake Steiner, blake.a.steiner@gmail.com
+URL: -Place your custom URL here-
+
+Description: This script was made to automate the process of retrieving mean land surface temperature (LST),
+normalized difference vegetation index (NDVI), normalized difference built-up index (NDBI),
+albedo, normalized difference water index (NDWI), and night land surface temperature (night LST)
+for any studyarea specified via a polygon shapefile loaded from Google Earth Engine Assets for each month. This script calls on the six
+retrieval scripts which retrieve clipped median data for six variables determined to affect heat exposure:
+  1.  "Retrieve_LST", 
+  2.  "Retrieve_NDVI", 
+  3.  "Retrieve_NDBI", 
+  4.  "Retrieve_Albedo",
+  5.  "Retrieve_NDWI", 
+  6.  "RetrieveNightLST"
+
+Usage: Requires access to Earth Engine Assets (Google equivalent of shapefiles) from the library: 
+"users/YourUserName/ShapeFileName" which is a polygon of the study area with census tracts. 
+Requires access to the following scripts: "Retrieve_LST", "Retrieve_NDVI", "Retrieve_NDBI", "Retrieve_Albedo",
+"Retrieve_NDWI", "RetrieveNightLST".
+
+
+
+Parameters:
+In: start_year
+    end_year
+    start_day_of_year
+    end_day_of_year
+    month
+    save
+    output_dir
+    geography
+    studyoutline
+    display
+    
+Out: CSV files and geotiffs of day and nighttime LST, NDVI, NDBI, NDWI and albedo
+
+*/
+
+//select start year
+var start_year = 2020;
+
+//select end year
+var end_year = 2020;
+
+
+//NASA Day of Year Calendar (go to day of year calendars under older reports): https://asd.gsfc.nasa.gov/Craig.Markwardt/
+
+// select start and end day of year // currently set to summer
+var start_day_of_year = 275; // About April 15th is 106
+var end_day_of_year   =  290; // About Oct. 16th is 288
+
+//Add month if you want to capture data by month
+var month = "October";
+
+// Do you want to save the output as .csv-file?
+var save = true;
+
+// Specify Output directory
+var output_dir = 'DEVELOP_2020';
+
+//Specify geogrpahy for naming exports
+var geography = "Tempe";
+
+// Select study outline and scale (your study area shapefile goes here after importing and renaming the asset)
+var studyoutline =  tempe_ct;
+print(studyoutline);
+// do you want to display the layers (can be set to true or false)
+var display = true;
+
+////////////////////////////////////////////////////////////////////////////////////////////
+///                           EXTRACT DATA
+////////////////////////////////////////////////////////////////////////////////////////////
+
+// declare functions needed for this script
+var Retrieve_LST = require('users/DEVELOP_Geoinformatics/NASA_DEVELOP_Code_Examples:NASA_DEVELOP_Spring2020/AZ_PhiladelphiaHAQ/Retrieve_LST');
+var Retrieve_NDVI = require('users/DEVELOP_Geoinformatics/NASA_DEVELOP_Code_Examples:NASA_DEVELOP_Spring2020/AZ_PhiladelphiaHAQ/Retrieve_NDVI');
+var Retrieve_NDBI = require('users/DEVELOP_Geoinformatics/NASA_DEVELOP_Code_Examples:NASA_DEVELOP_Spring2020/AZ_PhiladelphiaHAQ/Retrieve_NDBI');
+var Retrieve_Albedo = require('users/DEVELOP_Geoinformatics/NASA_DEVELOP_Code_Examples:NASA_DEVELOP_Spring2020/AZ_PhiladelphiaHAQ/Retrieve_Albedo');
+var Retrieve_NDWI = require('users/DEVELOP_Geoinformatics/NASA_DEVELOP_Code_Examples:NASA_DEVELOP_Spring2020/AZ_PhiladelphiaHAQ/Retrieve_NDWI');
+var RetrieveNightLST = require('users/DEVELOP_Geoinformatics/NASA_DEVELOP_Code_Examples:NASA_DEVELOP_Spring2020/AZ_PhiladelphiaHAQ/RetrieveNightLST');
+
+
+//define limits in accordance with selections above
+// year range for which data is retrieved
+var year_range = ee.Filter.calendarRange(start_year,end_year,'year');
+
+// day of the year range (currently set to summer only)
+var day_range = ee.Filter.dayOfYear(start_day_of_year, end_day_of_year); 
+
+//Create variable for current date to add to export CSV
+var d = new Date();
+var current_date = d.getDate() + '_' + d.getMonth() + '_' + d.getFullYear();
+
+// Retrieve satellite data 
+// NOTE: comment out variables you are not interested in,
+// if done also need to comment out corresponding ".addBands()" line below 
+// Retrieve LST from Landsat 8 Surface Reflectance Imagery
+var LST = Retrieve_LST.LST_fromLandsat8(day_range, year_range, studyoutline, display);
+// Retrieve NDVI from Landsat 8 Surface Reflectance Imagery
+var ndvi = Retrieve_NDVI.NDVI_fromLandsat8(day_range, year_range, studyoutline, display);
+// Retrieve NDBI from Landsat 8 TOA imagery
+var ndbi = Retrieve_NDBI.NDBI_fromLandsat8(day_range, year_range, studyoutline, display);
+// Retrieve Albedo from Landsat 8 SR imagery
+var albedo = Retrieve_Albedo.albedo_fromLandsat8SR(day_range,year_range,studyoutline, display);
+// Retrieve NDWI
+var ndwi = Retrieve_NDWI.NDWI_fromMODIS(day_range, year_range, studyoutline, display);
+//Retrieve Night LST
+var NLST = RetrieveNightLST.NightLST_fromAquaMODIS(day_range, year_range, studyoutline, display);
+
+////////////////////////////////////////////////////////////////////////////////////////////
+///                           RESOLVE TO CENSUS TRACT
+////////////////////////////////////////////////////////////////////////////////////////////
+
+// Summarize LST layer by Census Tracts
+
+// Combine bands into single image
+var combinedBands= LST.select('LST')
+.addBands(ndbi.select('ndbi_LS8').rename('ndbi'))
+.addBands(albedo.select('albedo'))
+.addBands(ndvi.select('ndvi'))
+.addBands(ndwi.select('ndwi'))
+.addBands(NLST.select('LSTN_F'))
+print(combinedBands)
+
+
+// Summarize data at census tract
+var combinedBands_CT = combinedBands.reduceRegions({
+    'collection' : studyoutline,
+    'reducer' : ee.Reducer.mean(),
+    'scale': 30
+  });
+print(combinedBands_CT)  
+
+
+// export data to csv  
+ee.Algorithms.If(save,Export.table.toDrive({
+  //specify collection to save
+  collection: combinedBands_CT,
+  // Define save name
+  description: 'Median_EnvVar_' + geography + '_' + start_year +'_' + month + '_' + current_date, 
+  // Specifies output directory 
+  folder: output_dir, 
+  fileFormat: 'CSV',
+}));
+
+
+/////////////////////////// END MAIN SCRIPT ////////////////////////////////////////////////
+
+//////////////////////////// EXPORT IMAGES (monthly) ///////////////////////////////////////
+
+// //save clipped median data to geotiff
+// //save NDVI
+ Export.image.toDrive({
+   image: ndvi.select("ndvi"),
+   description: geography+'NDVI'+ '_' + start_year + '_' + month,
+   fileFormat: 'GeoTIFF',
+   maxPixels: 1e9,
+   scale: 30,
+   region: studyoutline,
+   folder: output_dir
+ });
+// // save NDBI 
+   Export.image.toDrive({
+   image: ndbi.select("ndbi_LS8"),
+   description: geography+'NDBI'+'_' +start_year + '_' + month,
+   fileFormat: 'GeoTIFF',
+   maxPixels: 1e9,
+   scale: 30,
+   region: studyoutline,
+   folder: output_dir
+ });
+// //save NDWI 
+   Export.image.toDrive({
+   image: ndwi.select("ndwi"),
+   description: geography+'NDWI'+'_' +start_year + '_' + month,
+   fileFormat: 'GeoTIFF',
+   maxPixels: 1e9,
+   scale: 1000,
+   region: studyoutline,
+   folder: output_dir
+ });
+// // save albedo
+   Export.image.toDrive({
+   image: albedo.select("albedo"),
+   description: geography+'Albedo'+'_' +start_year + '_' + month,
+   fileFormat: 'GeoTIFF',
+   maxPixels: 1e9,
+   scale: 30,
+   region: studyoutline,
+   folder: output_dir
+ });
+ 
+// // save daytime LST 
+   Export.image.toDrive({
+   image: LST.select("LST"),
+   description: geography+'LST'+'_' +start_year + '_' + month,
+   fileFormat: 'GeoTIFF',
+   maxPixels: 1e9,
+   scale: 30,
+   region: studyoutline,
+   folder: output_dir
+ });
+// //save night time LST
+   Export.image.toDrive({
+     image: NLST.select("LSTN_F"),
+     description: geography+'NightLST'+'_' +start_year + '_' + month,
+     fileFormat: 'GeoTIFF',
+     maxPixels: 1e9,
+     scale: 1000,
+     region: studyoutline,
+     folder: output_dir
+   });

@@ -1,0 +1,422 @@
+########################################################################
+#                            ROUTINE 
+#     AZ_Tempe_UDII_Fall2020_PrincipalComponentAnalysis_UHEAT
+#-----------------------------------------------------------------------
+#
+# Description: This script calculates (1) a heat exposure score, 
+# (2) a heat vulnerability score and (3) a heat priority score by census tract 
+# for the City of Tempe using Principal Component Analysis. 
+# The script was adapted from vulnerability-index.RMD by Mary Wright, 
+# ASU and from the Spring 2020 AZ-Philadelphia project. The output is saved as a csv file.
+#
+# Running this script requires the following input files:
+#         - Socioeconomic data as written out by 
+#           AZ_Tempe_UDII_Fall2020_TidyCensus.R
+#           (filename TMP_UHEAT_CENSUS_VARIABLES_*_*_CT_ALLVariables_ALLMetrics_2020-10-22.csv
+#         - Satellite retrieved nLST, dLST, NDVI, NDBI, NDWI and albedo 
+#           data as written out by Google Earth Engine script 
+#           Fall2020_AZ_TempeII_AggSatData (filename (Median_EnvVar_2015_2020_*.csv)
+#
+# Created by: Charlotte C. Wagner (ccwagner88@gmail.com)
+# Date created: March 10, 2020
+#
+# Modified by: Blake A. Steiner (blake.a.steiner@gmail.com)
+# Date modified: Oct. 13, 2020
+#
+# History: 2020, Mar 10 - ccw - adapted script from vulnerability-index.RMD
+#          2020, Mar 21 - ccw - added heat exposure and heat vulnerability index
+#          2020, Oct 13 - bas - modified code for just heat exposure index for Tempe 2020
+#          2020, Oct 25 - bas - modified code to take in new vulnerability variables for Tempe 2020
+#          2020, Oct 29 - bas - edited code to be neater
+#          2020, Nov 16 - bas - fixed row ordering issue in output
+########################################################################
+
+
+#######################################################################
+## Set up Libraries
+#######################################################################
+
+#specify the packages of required for this analysis
+packages = c("tidyverse","psych","paran","reshape2",
+             "tidycensus", "tigris","sf","ggpubr","MVN", 
+             "RColorBrewer", "pheatmap", "grid")
+
+
+#use this function to check if each package is on the local machine
+#if a package is installed, it will be loaded
+#if any are not, the missing package(s) will be installed and loaded
+package.check <- lapply(packages, FUN = function(x) {
+  if (!require(x, character.only = TRUE)) {
+    install.packages(x, dependencies = TRUE)
+    library(x, character.only = TRUE)
+  }
+})
+rm(package.check);rm(packages)
+
+# Specify working directory 
+# this is where input variables are located and where output will be saved
+setwd("D:/AZ_Fall2020/R_Scripts/Input_R")
+
+# Input filenames
+
+#Census or American Community Survey derived variables (or health variables, too)
+SEH_filename='TMP_UHEAT_CENSUS_VARIABLES_2018_acs5_CT_ALLVariables_E_2020-10-22.csv'
+
+#Satellite derived variables
+ENV_filename='Median_EnvVar_Tempe_2015_2020_20_9_2020.csv'
+
+# specify name udner which to save the output
+savename='AZ_Tempe_UDII_FA2020_Var_Scores_20201025.csv'
+
+
+#######################################################################
+## Heat Vulnerability Score 
+#######################################################################
+
+# Load data
+SEH_data = read.csv(SEH_filename)
+
+
+# Standardize variables 
+# (all variables are represented as z-scores, with mean=0, std=1)
+SEH.input <- SEH_data[,2:ncol(SEH_data)]
+
+# rename variables if needed
+names(SEH.input)=c("total_pop", "med_income", "minority","poverty","No_HSDip", 
+                   "age>65", "age>65, isolated", "living_alone")
+# standardize
+SEH.input_z <- scale(SEH.input, center = T) #standardize, mean=0,sd=1
+
+## STEP 1: COMPONENT SELECTION
+# There are 3 common ways to decide which components to retain, all of which we explored.
+# Principal Component Analysis
+SEH.pca_all <- principal(SEH.input_z, nfactors = ncol(SEH.input_z), rotate = 'none', scores = T) 
+#unrotated full component solution for use in determining number of components to retain
+
+# 1. Eigenvalues > 1 (Kaiser criterion)
+SEH.pca_all$values #print eigenvalues
+paste0("Number of components suggested based on Kaiser criterion: ",which(SEH.pca_all$values<1)[1] - 1) #print last component number to be greater than 1
+
+# 2. Accounting for a prescribed amount of variance (we chose 80%, though 70% is also common)
+v=(SEH.pca_all$Vaccounted)[3,1:ncol(SEH.pca_all$Vaccounted)] #print amount of variance accounted for 
+paste0("Number of components suggested based on 80% variance threshold: ",which( v>.8)[1])
+
+# 3. Scree plot
+# components with biggest gradient are included
+scree(SEH.input_z,hline = -1,factors = F)
+
+# Compare PCA result to a PCA carried out on randomly generated data 
+# (same number of variables, and observations)
+set.seed(123) #note this allows you to save the randomly generated data so others can reproduce the work 
+SEH.input_z_repl=SEH.input_z
+SEH.input_z_repl[which(is.na(SEH.input_z_repl))]=0
+paran.pca <- paran(SEH.input_z_repl,iterations = 100, all = T, cfa = F, quietly = T)
+
+obs <- data.frame(1:ncol(SEH.input_z),paran.pca$Ev,paran.pca$RndEv,apply(paran.pca$SimEvs, 2, function(x) quantile(x,.95)))
+colnames(obs) <- c("Components","Eigenvalues","Mean_Simulated","pctl95_Simulated")
+round(obs,3)
+
+obs_melt <- melt(obs,id.vars = "Components")
+colnames(obs_melt) <- c("Components","Variable","Eigenvalues")
+
+# Make plot
+print(ggplot(data = obs_melt, aes(x=Components, y=Eigenvalues, group = Variable))+
+        geom_line(aes(color = Variable))+
+        theme(legend.position = 'top')+
+        scale_x_continuous(breaks = 1:ncol(SEH.input_z))+
+        ggtitle("Parallel Analysis of SEH.input_z Dataset using PCA"))
+
+# Comparing these different approaches, two out of three indicated that 
+# 2 components should be selected. 
+# Comparing different number of components extracted
+SEH.pca_2 <- principal(SEH.input_z, 
+                       nfactors = 2, #how many components  
+                       rotate = 'varimax', scores = T)
+
+## STEP 2: SIGN DETERMINATION
+#Investigate loadings to make sure the 'sign' is appropriate (larger values should = higher vulnerability)
+print.psych(SEH.pca_2,cut = .4, sort = T)
+# Note: signs on all variables and components correspond to the relationship we expect between the variables 
+# and heat vulnerability. No sign change was necessary.
+
+## STEP 3: PRINCIPAL COMPONENT ANALYSIS 
+# Do PCA with select number of components and varimax rotation
+tempSEH <- SEH.input_z
+SEH.pca_2 <- principal(tempSEH, nfactors = 2, rotate = 'varimax', scores = T)
+print.psych(SEH.pca_2,sort = T, cut = .4)
+
+# Extract loadings and explained variance
+SEH_pca_2_output <- (fa.sort(SEH.pca_2))$loadings[,1:2]
+
+# Plot Loadings
+# set colnames
+colnames(SEH_pca_2_output)=c("PC1", "PC2"
+                             #, "PC3" remember to add components here if eigenvalues say to have more than two
+)
+
+# create function that rotates labels 45 degrees
+draw_colnames_45 <- function (coln, gaps, ...) {
+  coord = pheatmap:::find_coordinates(length(coln), gaps)
+  x = coord$coord - 0.5 * coord$size
+  res = textGrob(coln, x = x, y = unit(1, "npc") - unit(3,"bigpts"), vjust = 0.5, hjust = 1, rot = 45, gp = gpar(...))
+  return(res)}
+assignInNamespace(x="draw_colnames", value="draw_colnames_45",
+                  ns=asNamespace("pheatmap"))
+
+# Save Heatmap of loadings
+postscript("Heatmap_HVS_2Components_TechPaper.eps", horizontal = FALSE, onefile = FALSE, paper = "special", 
+           point=9, height = 4.5, width = 3.5)
+pheatmap(SEH_pca_2_output, color = brewer.pal(n = 10, name = "RdBu"),
+         #legend_breaks = c(-1, -0.5, 0, 0.5, 1),
+         treeheight_row = 0, treeheight_col = 0, 
+         cluster_rows=F, cluster_cols=F)
+dev.off()
+
+# Extract variance and print
+SEH_pca_2_output <- round( rbind(SEH_pca_2_output,SEH.pca_2$Vaccounted[1:2,1:2]),2)
+print(SEH_pca_2_output)
+
+# Extract scores (this are simple sums of scores for each component and census tract)
+SEHscores_2 <- SEH.pca_2$scores
+
+#######################################################################
+## Heat Exposure Score 
+#######################################################################
+# Load environmental data
+ENV_data_raw = read.csv(ENV_filename)
+
+# extract only GEOID and variable columns
+ENV_data = data.frame(ENV_data_raw$TempeTra_3, ENV_data_raw$LST, ENV_data_raw$LSTN_F, ENV_data_raw$ndvi, ENV_data_raw$ndbi, ENV_data_raw$ndwi, ENV_data_raw$albedo)
+
+# Rename variables
+names(ENV_data)= c("GEOID", "dLST", "nLST", "ndvi", "ndbi", "ndwi", "albedo")
+
+# Rearrange CT order to match SEH CT order
+ENV_data <- ENV_data[order(ENV_data$GEOID),]
+
+# Standardize variables 
+# (all variables are represented as z-scores, with mean=0, std=1)
+ENV.input <- ENV_data[,2:ncol(ENV_data)]
+ENV.input_z <- scale(ENV.input, center = T) #standardize, mean=0,sd=1
+
+
+## STEP 1: COMPONENT SELECTION
+# Run PCA without limiting factors or rotation
+ENV.pca_all <- principal(ENV.input_z, nfactors = ncol(ENV.input_z), rotate = 'none', scores = T) 
+# unrotated full component solution for use in determining number of components to retain
+# There are 3 common ways to decide which components to retain, all of which we explored.
+
+# 1. Eigenvalues > 1 (Kaiser criterion)
+ENV.pca_all$values #print eigenvalues
+paste0("Number of components suggested based on Kaiser criterion: ",which(ENV.pca_all$values<1)[1] - 1) #print last component number to be greater than 1
+
+# 2. Accounting for a prescribed amount of variance
+v=(ENV.pca_all$Vaccounted)[3,1:ncol(ENV.pca_all$Vaccounted)] #print amount of variance accounted for 
+paste0("Number of components suggested based on 80% variance threshold: ", which( v>.8)[1])
+
+# 3. Scree plot
+scree(ENV.input_z,hline = -1,factors = F)
+# Compare PCA result to a PCA carried out on randomly generated data 
+# (same number of variables, and observations)
+set.seed(123)
+ENV.input_z_repl=ENV.input_z
+ENV.input_z_repl[which(is.na(ENV.input_z_repl))]=0
+paran.pca <- paran(ENV.input_z_repl,iterations = 100, all = T, cfa = F, quietly = T)
+
+obs <- data.frame(1:ncol(ENV.input_z),paran.pca$Ev,paran.pca$RndEv,apply(paran.pca$SimEvs, 2, function(x) quantile(x,.95)))
+colnames(obs) <- c("Components","Eigenvalues","Mean_Simulated","pctl95_Simulated")
+round(obs,3)
+
+obs_melt <- melt(obs,id.vars = "Components")
+colnames(obs_melt) <- c("Components","Variable","Eigenvalues")
+
+#Make plot
+print(ggplot(data = obs_melt, aes(x=Components, y=Eigenvalues, group = Variable))+
+        geom_line(aes(color = Variable))+
+        theme(legend.position = 'top')+
+        scale_x_continuous(breaks = 1:ncol(ENV.input_z))+
+        ggtitle("Parallel Analysis of ENV.input_z Dataset using PCA"))
+
+# Comparing these different approaches, Kaiser criterion and variance threshold 
+# indicated that 2 components should be selected. The scree plot showed that the third component
+# while technically not included, was just barely below the threshold
+# we decided to use two components, also because albedo and nighttime LST
+# behaved spatially quite differently from the other variables.
+
+# Comparing different number of components extracted
+ENV.pca_2 <- principal(ENV.input_z, nfactors = 2, rotate = 'varimax', scores = T)
+#Still results in two components. 
+
+## STEP 2: SIGN DETERMINATION
+# Look at loadings 
+print.psych(ENV.pca_2,cut = .4, sort = T)
+# Note: signs on all variables and components correspond to the relationship we expect between the variables 
+# and heat vulnerability. No sign change was necessary.
+
+## STEP 3: PRINCIPAL COMPONENT ANALYSIS 
+# Do PCA with select number of components and varimax rotation
+tempENV <- ENV.input_z
+ENV.pca_2 <- principal(tempENV, nfactors = 2, rotate = 'varimax', scores = T)
+print.psych(ENV.pca_2,sort = T, cut = .4)
+
+# Extract loadings and explained variance
+ENV_pca_2_output <- (fa.sort(ENV.pca_2))$loadings[,1:2]
+colnames(ENV_pca_2_output)=c("PC1", "PC2")
+
+# Plot Loadings
+# Save Heatmap of loadings
+postscript("AZFall2020_Heatmap_HEI_2Components_TechPaper.eps", horizontal = FALSE, onefile = FALSE, paper = "special", 
+           point=9, height = 2.5, width = 2.5)
+pheatmap(ENV_pca_2_output, color = brewer.pal(n = 10, name = "RdBu"),
+         #legend_breaks = c(-1, -0.5, 0, 0.5, 1),
+         treeheight_row = 0, treeheight_col = 0, 
+         cluster_rows=F, cluster_cols=F)
+dev.off()
+# Extract explained variance
+ENV_pca_2_output <- round( rbind(ENV_pca_2_output, ENV.pca_2$Vaccounted[1:3,1:2]),2)
+print(ENV_pca_2_output)
+
+# Extract scores (this are simple sums of scores for each component and census tract)
+ENVscores_2 <- ENV.pca_2$scores
+
+#######################################################################
+## Heat Priority Score (Combined PCA)
+#######################################################################
+
+
+# Merge with socio-economic + environmental data by GEOID
+merged_INDICATORS= merge(SEH_data, ENV_data, by = "GEOID")
+
+
+
+# Make dataset of all 14 variables
+HPS.input=merged_INDICATORS[,2:ncol(merged_INDICATORS)]
+view(HPS.input)
+
+# Rename variables
+names(HPS.input)=c("total_pop", "med_income", "minority","poverty","No_HSDip", 
+                   "age>65", "age>65, isolated", "living_alone", "day LST", 
+                   "night LST", "NDVI", "NDBI", "NDWI", "albedo")
+
+# Standardize variables
+#HVI.input <- HVI_data[,5:ncol(HVI_data)]
+# Standarize Compute z-scores
+HPS.input_z <- scale(HPS.input, center = T) #standardize, mean=0,sd=1
+
+## STEP 1: COMPONENT SELECTION
+# There are 3 common ways to decide which components to retain, all of which we explored.
+# Principal Component Analysis
+HPS.pca_all <- principal(HPS.input_z, nfactors = ncol(HPS.input_z), rotate = 'none', scores = T) 
+#unrotated full component solution for use in determining number of components to retain
+
+# 1. Eigenalues > 1 (Kaiser criterion)
+HPS.pca_all$values #print eigHVIalues
+paste0("Number of components suggested based on Kaiser criterion: ",which(HPS.pca_all$values<1)[1] - 1) #print last component number to be greater than 1
+
+# 2. Accounting for a prescribed amount of variance
+(HPS.pca_all$Vaccounted)[3,1:ncol(HPS.pca_all$Vaccounted)] #print amount of variance accounted for 
+paste0("Number of components suggested based on 80% variance threshold: ",which(HPS.pca_all$Vaccounted[3,]>.8)[1])
+
+# 3. Scree plot
+scree(HPS.input_z,hline = -1,factors = F)
+
+# Compare PCA result to a PCA carried out on randomly generated data 
+# (same number of variables, and observations)
+set.seed(123)
+HPS.input_z_repl=HPS.input_z
+HPS.input_z_repl[which(is.na(HPS.input_z_repl))]=0
+paran.pca <- paran(HPS.input_z_repl,iterations = 100, all = T, cfa = F, quietly = T)
+
+obs <- data.frame(1:ncol(HPS.input_z),paran.pca$Ev,paran.pca$RndEv,apply(paran.pca$SimEvs, 2, function(x) quantile(x,.95)))
+colnames(obs) <- c("Components","EigHVIalues","Mean_Simulated","pctl95_Simulated")
+
+obs_melt <- melt(obs,id.vars = "Components")
+colnames(obs_melt) <- c("Components","Variable","Eigenvalues")
+
+# Make Plot
+print(ggplot(data = obs_melt, aes(x=Components, y=Eigenvalues, group = Variable))+
+        geom_line(aes(color = Variable))+
+        theme(legend.position = 'top')+
+        scale_x_continuous(breaks = 1:ncol(HPS.input_z))+
+        ggtitle("Parallel Analysis of HPS.input_z Dataset using PCA"))
+# Note: we decided to include 4 components, since both Scree plot and Kaiser criterion indicated so.
+
+#Comparing different number of components extracted
+#HPS.pca_5 <- principal(HPS.input_z, nfactors = 5, rotate = 'varimax', scores = T)
+HPS.pca_4 <- principal(HPS.input_z, nfactors = 4, rotate = 'varimax', scores = T)
+
+
+## STEP 2: SIGN DETERMINATION
+# Look at loadings 
+print.psych(HPS.pca_4,cut = .4, sort = T)
+#print.psych(HPS.pca_5,cut = .4, sort = T)
+# Note: signs on all variables and components correspond to the relationship we expect between the variables 
+# and heat vulnerability. No sign change was necessary.
+
+## STEP 3: PRINCIPAL COMPONENT ANALYSIS 
+# Do PCA with select number of components and varimax rotation
+tempHPS <- HPS.input_z
+HPS.pca_4 <- principal(tempHPS, nfactors = 4, rotate = 'varimax', scores = T)
+
+# Extract loadings and explained variance
+HPS_pca_4_output <- (fa.sort(HPS.pca_4))$loadings[,1:4]
+
+# Plot Loadings
+# Save Heatmap of loadings
+colnames(HPS_pca_4_output)=c("PC1", "PC2", "PC3", "PC4")
+postscript("Heatmap_HPS_4Components_TechPaper.eps", horizontal = FALSE, onefile = FALSE, paper = "special", 
+           point=9, height = 5, width = 7.5)
+pheatmap(HPS_pca_4_output, color = brewer.pal(n = 10, name = "RdBu"),
+         legend_breaks = c(-1, -0.5, 0, 0.5, 1),
+         treeheight_row = 0, treeheight_col = 0, 
+         cluster_rows=F, cluster_cols=F)
+dev.off()
+
+
+# concatenate variance
+HPS_pca_4_output <- round( rbind(HPS_pca_4_output,HPS.pca_4$Vaccounted[1:3,1:4]),2)
+
+# Extract scores
+scores_4 <- HPS.pca_4$scores
+
+
+#######################################################################
+## Save Data
+#######################################################################
+# create variable of difference to the mean
+DMu = (t(apply(HPS.input, 1, function(x) x-colMeans(HPS.input, na.rm=TRUE))))
+
+# Create for Tempe with just env. data
+#DMu <- (t(apply(ENV.input, 1, function(x) x-colMeans(ENV.input, na.rm = T))))
+
+
+# save output
+# NOTE: double check the row order of your ENV and SEH CTs
+output=cbind(as.character(SEH_data$GEOID), #common key 
+             HPS.input, #all variables
+             DMu, #difference from the mean for all variables
+             as.numeric(rowSums(ENV.pca_2$scores)), #scores for the maps
+             as.numeric(rowSums(SEH.pca_2$scores)), #scores for the maps
+             as.numeric(rowSums(HPS.pca_4$scores)) #scores for the maps
+)
+
+
+# Rename columns
+names(output)=c("GEOID", 
+                "TOTAL_POP", "MED_INCOME", "MINORITY", "POVERTY", 
+                "NO_hsDIP",  "OVER65", "OVER65_ALONE", "ALONE", 
+                #                "LIMENG_PER", "NWHITE_PER", "ISOL65_PER", "POVRTY_PER",
+                "dLST", "nLST","NDVI","NDBI","NDWI", "albedo",
+                "TOTAL_POP_DMU", "MED_INCOME_DMU", "MINORITY_DMU", "POVERTY_DMU", 
+                "NO_hsDIP_DMU",  "OVER65_DMU", "OVER65_ALONE_DMU", "ALONE_DMU",  
+                #                "LIMENG_DMU", "NWHITE_DMU", "ISOL65_DMU", "POVRTY_DMU",
+                "dLST_DMU", "nLST_DMU","NDVI_DMU","NDBI_DMU","NDWI_DMU", "albedo_DMU",
+                "HES_SCORE", 
+                "HVS_SCORE", 
+                "HPS_SCORE"
+)
+
+# save a csv file 
+write.csv(output,savename)
+
+

@@ -1,0 +1,124 @@
+﻿exports.NDBI_fromLandsat8 = function(DAY_OF_YEAR_RANGE, YEAR_RANGE, STUDYBOUNDS, DISPLAY){
+
+ 
+/* Script: Fall2020_AZ_Retrieve_NDBI - Tempe Urban Development II - NDBI
+
+Authors: Blake Steiner, John Dialesandro, Anson Pang, and Sydney Boogaard 
+Prior Authors: Brandy Nisbet-Wilcox, Samuel Meltzer, Spencer Nelson, Charlotte Wagner
+Date: November 3, 2020
+Project: Tempe Urban Development II, Fall 2020
+Node: Arizona, Tempe
+Contact: Blake Steiner, blake.a.steiner@gmail.com
+URL: -Place custom URL here-
+
+Description: This script calculates median NDBI across a given date range and year range.
+This script is FUNCTION and run from the main script Fall2020_AZ_TempeII_AggSatData.
+The function requires DATE_RANGE (in the form of ee.Filter.dayOfYear(start_day_of_year, end_day_of_year)) 
+YEAR_RANGE (in the form of ee.Filter.calendarRange(start_year, end_year,'year'), 
+STUDYBOUNDS (a polygon of the study area saved in Google Garth Engine Assets) and 
+DISPLAY (can be set to true or false) as inputs, which are specified in Fall2020_AZ_TempeII_AggSatData. 
+This script calculates median NDBI across a given date range and year range and 
+and was developed to calculate NDBI for census tracts located in Philadelphia, Pennsylvania, US. 
+NDBI is calculated from bi-weekly Landsat 8 Surface Reflectance Tier 1 data at 30m resolution. 
+
+Usage: Requires access to Google Earth Engine.
+
+Parameters:
+In: DATE_RANGE
+    YEAR_RANGE
+    STUDYBOUNDS
+    DISPLAY
+Out: clipped image of median NDBI
+
+
+*/
+
+
+//****************** CLOUD MASK FUNCTION *****************//
+  
+// Create a function to mask cloudy and cloud shadow pixels
+// 3 corresponds to cloud shadow
+// 5 corresponds to cloud
+// More info on bit values for the pixel_qa band can be found at https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_LC08_C01_T1_SR
+var cloud_mask = function maskl8(i) { 
+// This reassigns cloud shadow pixels to clear pixels
+    var cloudShadowBitMask = (1 << 3); 
+// This reassigns cloud pixels are to clear pixels
+    var cloudsBitMask = (1 << 5); 
+// This reassigns water pixels are to clear pixels
+    var waterBitMask = (1 << 2);  
+// Selects the pixel_qa band and sets it to a variable
+    var qa = i.select('pixel_qa');
+// Multiplies the bits in the original pixel_qa band by the new reassigned cloud shadow transparent bits.
+    var mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0)      
+              .and(qa.bitwiseAnd(cloudsBitMask).eq(0))
+              .and(qa.bitwiseAnd(waterBitMask).eq(0));
+// The cloud cover and cloud shadow pixels now have bit values of 1 = transparent
+// Transparent pixels will  not be included in the further analysis
+    return i.updateMask(mask);                              
+}
+
+
+//** NDBI from Landsat ********************************//
+
+// Reference:
+// Malik, M.S., Shukla, J.P. Retrieving of Land Surface Temperature Using 
+// Thermal Remote Sensing and GIS Techniques in Kandaihimmat Watershed, 
+// Hoshangabad, Madhya Pradesh. J Geol Soc India 92, 298–304 (2018). 
+// https://doi.org/10.1007/s12594-018-1010-y
+
+print("... Retrieving image collection Landsat 8 Tier 1 Suface Reflectance data...");
+// Filter landsat image collection down to 2018 and Philadelphia area
+var collection_LANDSAT8 = ee.ImageCollection("LANDSAT/LC08/C01/T1_SR")
+.filterBounds(STUDYBOUNDS) //only images within study area
+.filter(YEAR_RANGE)
+.filter(DAY_OF_YEAR_RANGE)
+.map(cloud_mask)// use above functions to filter cloudy pixels
+
+//print(collection_LANDSAT8)
+
+ print(" ...Calculating NDBI from shortwave infrared (band B6) and near infrared (band B5)")
+//calculate NDBI from Landsat 8 imagery (SR)
+var ndbi_LANDSAT8 = collection_LANDSAT8.map(
+  function(image){
+              return image.addBands(
+                image.expression(
+                  // Compute Normalised difference building index
+                  // Equation: (SWIR - NIR) / (SWIR +NIR)
+                '(SWIR - NIR) / (SWIR + NIR)', 
+              { 
+                'SWIR': image.select('B6'),
+                'NIR': image.select('B5')
+              }).rename('ndbi_LS8'));
+          });
+ //print(ndbi_LANDSAT8)
+ 
+ 
+ // Make histogram of # of pixels
+ var counts_NDBI = ndbi_LANDSAT8.select("ndbi_LS8").count();
+ var histogram_NDBI_counts = ui.Chart.image.histogram(counts_NDBI, STUDYBOUNDS, 30)
+ print(histogram_NDBI_counts)
+  
+ //Calculate median NDBI for 2018
+  print("... Computing median NDBI across time")
+ var median_ndbi_LANDSAT8 = ndbi_LANDSAT8.median();
+
+ 
+// Plot histogram of NDBI values
+print("... Plotting histogram of NDBI values")
+var cNDBI_Landsat = median_ndbi_LANDSAT8.clip(STUDYBOUNDS)
+var values_NDBI = cNDBI_Landsat.select('ndbi_LS8') 
+var histogram_NDBI_pixels = ui.Chart.image.histogram(values_NDBI, STUDYBOUNDS, 30)
+print(histogram_NDBI_pixels)
+
+// Center the map on the image.
+Map.centerObject(STUDYBOUNDS)
+
+// Display layer
+// High NDBI values represent low perviousness
+var ndbiVis = {bands: 'ndbi_LS8', min: -0.6, max: 0.2, palette: ['FF9966', 'CC6633', '993300', '660000']}; 
+Map.addLayer(cNDBI_Landsat, ndbiVis, 'NDBI', DISPLAY)
+
+// return image of median NDBI
+return median_ndbi_LANDSAT8
+}

@@ -1,0 +1,128 @@
+exports.albedo_fromLandsat8SR = function(DAY_OF_YEAR_RANGE, YEAR_RANGE, STUDYBOUNDS, DISPLAY){
+
+/* Script: Fall2020_AZ_Retrieve_Albedo - Tempe Urban Development II - Albedo
+
+Authors: Blake Steiner, John Dialesandro, Anson Pang, and Sydney Boogaard 
+Prior Authors: Brandy Nisbet-Wilcox, Samuel Meltzer, Spencer Nelson, Charlotte Wagner
+Date: November 3, 2020
+Project: Tempe Urban Development II, Fall 2020
+Node: Arizona, Tempe
+Contact: Blake Steiner, blake.a.steiner@gmail.com
+URL: -Place custom URL here-
+
+Description: This script calculates median albedo across a given date range and year range.
+This script is FUNCTION and run from the main script Fall2020_AZ_TempeII_AggSatData.
+The function requires DATE_RANGE (in the form of ee.Filter.dayOfYear(start_day_of_year, end_day_of_year)) 
+YEAR_RANGE (in the form of ee.Filter.calendarRange(start_year, end_year,'year'), 
+STUDYBOUNDS (a polygon of the study area saved in Google Garth Engine Assets) and 
+DISPLAY (can be set to true or false) as inputs, which are specified in Fall2020_AZ_TempeII_AggSatData. 
+This script calculates median albedo across a given date range and year range and 
+and was developed to calculate albedo for census tracts located in Philadelphia, Pennsylvania, US. 
+Albedo is calculated from bi-weekly Landsat 8 Surface Reflectance Tier 1 data at 30m resolution. 
+
+Usage: Requires access to Google Earth Engine.
+
+Parameters:
+In: DATE_RANGE
+    YEAR_RANGE
+    STUDYBOUNDS
+    DISPLAY
+Out: clipped image of median albedo
+
+*/
+
+
+
+//****************** CLOUD MASK FUNCTION *****************//
+  
+// Create a function to mask cloudy and cloud shadow pixels
+// 1 corresponds to clear
+// 3 corresponds to cloud shadow
+// 5 corresponds to cloud
+// More info on bit values for the pixel_qa band can be found at https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_LC08_C01_T1_SR
+var cloud_mask = function maskl8(i) { 
+// This reassigns cloud shadow pixels to clear pixels
+    var cloudShadowBitMask = (1 << 3); 
+// This reassigns cloud pixels are to clear pixels
+    var cloudsBitMask = (1 << 5); 
+// This reassigns water pixels are to clear pixels
+    var waterBitMask = (1 << 2);  
+// Selects the pixel_qa band and sets it to a variable
+    var qa = i.select('pixel_qa');
+// Multiplies the bits in the original pixel_qa band by the new reassigned cloud shadow transparent bits.
+    var mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0)      
+              .and(qa.bitwiseAnd(cloudsBitMask).eq(0))
+              .and(qa.bitwiseAnd(waterBitMask).eq(0));
+// The cloud cover and cloud shadow pixels now have bit values of 1 = transparent
+// Transparent pixels will  not be included in the further analysis
+    return i.updateMask(mask);                              
+}
+
+//************* LOAD DATA FROM LANDSAT *****************//
+
+print('...Loading data from Landsat')
+
+// Filter landsat image collection by year and date ranges, and geography boundaries. Cloud mask applied to collection
+ var collection = ee.ImageCollection('LANDSAT/LC08/C01/T1_SR')
+ .filterBounds(STUDYBOUNDS) //only images within study area
+ //filter by the set variables above for day of year range and year range
+ .filter(YEAR_RANGE)
+ .filter(DAY_OF_YEAR_RANGE)
+ // use above functions to filter cloudy pixels
+  .map(cloud_mask); 
+
+//*******************ALBEDO**********************//
+
+print('...Calculating albedo')
+
+//this function provides return the albedo per pixel as a new band
+var albedo = collection.map(function(image)
+            {
+              return image.addBands(
+              image.expression(
+                //this expression can be found here
+                //https://repositorio.inta.gob.ar/xmlui/bitstream/handle/20.500.12123/1374/INTA_CRMendoza-SanJuan_EEAMendoza_Olmedo_GF_water_Tools_and_Functions.pdf?sequence=1&isAllowed=y
+                //on page 367 as the Olmedo coefficients
+                //the coefficients are multiplied by the band and then summed
+                '(BLUE * 0.246 + GREEN * 0.146 + RED * 0.191 + 0.304 * NIR + 0.105 * SWIR1 + 0.008 * SWIR2) * 0.0001',
+                {
+                  'BLUE': image.select('B2'),
+                  'GREEN' : image.select('B3'),
+                  'RED' : image.select('B4'),
+                  'NIR' : image.select('B5'),
+                  'SWIR1' : image.select('B6'),
+                  'SWIR2' : image.select('B7')
+                  //returns new band containing albedo
+                }).rename('albedo'))});
+                  
+
+ // Make histogram of # of pixels
+ print("... Plotting histogram of number of pixels per location")
+ var counts_albedo = albedo.select("albedo").count();
+ var histogram_albedo_counts = ui.Chart.image.histogram(counts_albedo, STUDYBOUNDS, 30)
+ print(histogram_albedo_counts)
+ 
+//calculates median albedo per pixel geography in the image collection
+print("... Calculating median albedo")
+var median_albedo = albedo.median();
+print(median_albedo);
+
+
+// Plot a histogram of albedo values
+ print("... Plotting histogram of albedo values")
+ var calbedo = median_albedo.clip(STUDYBOUNDS)
+ var values_albedo = calbedo.select('albedo') 
+ var histogram_albedo_pixels = ui.Chart.image.histogram(values_albedo, STUDYBOUNDS, 30)
+ print(histogram_albedo_pixels)
+
+// Center the map on the image.
+Map.centerObject(STUDYBOUNDS)
+
+// Display layer
+var albedoVis =  {bands: "albedo", min: 0, max: 0.4, palette: ['663300','CCCC99','FFFFFF']}
+Map.addLayer(calbedo, albedoVis, "albedo", DISPLAY)
+
+// return image of median albedo
+return median_albedo;
+
+}

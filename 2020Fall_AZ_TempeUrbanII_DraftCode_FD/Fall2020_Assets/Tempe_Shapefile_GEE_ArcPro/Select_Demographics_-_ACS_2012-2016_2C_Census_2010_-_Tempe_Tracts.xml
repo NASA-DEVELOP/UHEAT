@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?><metadata>
+    <idinfo>
+        <citation>
+            <citeinfo>
+                <title>Map</title>
+            </citeinfo>
+        </citation>
+        <descript>
+            <abstract>This feature layer of Tempe's Census tracts are joined with the Census Bureau's data from the 2018 Planning Database (PDB), which was established to prepare for the upcoming 2020 Census.The 2018 PDB contains select operational, demographic, and socio-economic statistics from the 2010 Census and the 2012-2016 5-year ACS.For more information, see the United States Census Bureau 2018 Planning Database:https://www.census.gov/topics/research/guidance/planning-databases.html</abstract>
+            <purpose>Tempe Census Tracts with Planning Data Demographics from the Census Bureau's 2018 Planning Database.</purpose>
+        </descript>
+        <keywords>
+            <theme>
+                <themekt>None</themekt>
+                <themekey>Census</themekey>
+                <themekey>Tempe</themekey>
+                <themekey>Arizona</themekey>
+            </theme>
+        </keywords>
+        <accconst>None</accconst>
+        <useconst>This work is licensed under a Creative Commons Attribution 4.0 International License.</useconst>
+        <datacred>United States Census Bureau 2018 Planning Database https://www.census.gov/research/data/planning_database/2018/</datacred>
+    </idinfo>
+    <metainfo>
+        <metstdn>FGDC Content Standard for Digital Geospatial Metadata</metstdn>
+        <metstdv>FGDC-STD-001-1998</metstdv>
+        <mettc>local time</mettc>
+    </metainfo>
+</metadata>

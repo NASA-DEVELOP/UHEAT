@@ -1,0 +1,118 @@
+﻿exports.NDWI_fromMODIS = function(DAY_OF_YEAR_RANGE, YEAR_RANGE, STUDYBOUNDS, DISPLAY){
+
+/* Script: Fall2020_AZ_Retrieve_NDWI - Tempe Urban Development II - NDWI
+
+Authors: Blake Steiner, John Dialesandro, Anson Pang, and Sydney Boogaard 
+Prior Authors: Brandy Nisbet-Wilcox, Samuel Meltzer, Spencer Nelson, Charlotte Wagner
+Date: November 3, 2020
+Project: Tempe Urban Development II, Fall 2020
+Node: Arizona, Tempe
+Contact: Blake Steiner, blake.a.steiner@gmail.com
+URL: -Place custom URL here-
+
+Description: This script calculates median NDWI across a given date range and year range.
+This script is FUNCTION and run from the main script Fall2020_AZ_TempeII_AggSatData.
+The function requires DATE_RANGE (in the form of ee.Filter.dayOfYear(start_day_of_year, end_day_of_year)) 
+YEAR_RANGE (in the form of ee.Filter.calendarRange(start_year, end_year,'year'), 
+STUDYBOUNDS (a polygon of the study area saved in Google Garth Engine Assets) and 
+DISPLAY (can be set to true or false) as inputs, which are specified in Fall2020_AZ_TempeII_AggSatData. 
+This script calculates median NDWI across a given date range and year range and 
+and was developed to calculate NDWI for census tracts located in Philadelphia, Pennsylvania, US. 
+NDWI is calculated from Aqua MODIS Surface Reflectance Daily L2G Global 1km and 500m data, 
+using the surface reflectance bands at 500m resolution.
+
+Usage: Requires access to Google Earth Engine.
+
+Parameters:
+In: DATE_RANGE
+    YEAR_RANGE
+    STUDYBOUNDS
+    DISPLAY
+Out: clipped image of median NDWI
+
+*/
+
+//****************** CLOUD MASK FUNCTION *****************//
+
+//Create a function to mask low quality pixels
+var qualityMask = function maskModis(i) {
+// Selects the pixel_qa band and sets it to a variable
+    var qa = i.select('QC_500m');
+// Select lower quality pixels
+    var quality1BitMask = (1 << 0,1); // corrected product produced at less than ideal quality some or all bands
+    var quality2BitMask = (2 << 0,1); // corrected product not produced due to cloud effects all bands
+    var quality3BitMask = (3 << 0,1); // corrected product not produced due to other reasons some or all bands 
+    //                                    may be fill value [Note that a value of (11) overrides a value of (01)].
+    /// Set all selected pixels to transparent (will only keep pixels of highest quality (0))
+    var mask = qa.bitwiseAnd(quality1BitMask).eq(0)
+          .and(qa.bitwiseAnd(quality2BitMask).eq(0))
+          .and(qa.bitwiseAnd(quality3BitMask).eq(0));
+// Return image with only highest quality pixels
+    return i.updateMask(mask);                              
+}
+//****************** END CLOUD MASK FUNCTION *****************//
+
+
+
+print("... Retrieving image collection MODIS Aqua Daily Surface Reflectance data...");
+// Filter MODIS image collection down to 2016-2019, and summer only 
+var collection_AquaNDWI = ee.ImageCollection("MODIS/006/MYD09GA")
+.filter(YEAR_RANGE) // filter by years
+.filter(DAY_OF_YEAR_RANGE) // filter by day of year
+.map(qualityMask);  //apply quality mask
+print(collection_AquaNDWI)
+
+
+// Calculate NDWI from Modis Aqua daily surface reflectance
+// Reference:
+// Bo-cai Gao (1996).NDWI—A normalized difference water 
+// index for remote sensing of vegetation liquid water from space,
+// Remote Sensing of Environment, 58, 3, 257-266.
+print(" ...Calculating NDWI from 500m Surface Reflectance Band 2 and 500m Surface Reflectance Band 5")
+var ndwi_MODIS = collection_AquaNDWI.map(
+  function(image){
+              return image.addBands(
+                image.expression(
+                  // Compute Normalised difference building index
+                  // ******************************************************
+                  // Equation: (rho857 - rho1241) / (rho857 + rho1241)
+                  // ******************************************************
+                  // 0.86-μm and the 1.24-μm channels are located in the 
+                  // high reflectance plateau of vegetation canopies
+                '(rho857 - rho1241) / (rho857 + rho1241)', 
+              { 
+                'rho857': image.select('sur_refl_b02'),
+                'rho1241': image.select('sur_refl_b05')
+              }).rename('ndwi'));
+          });
+
+print(ndwi_MODIS)
+  
+// Make histogram of # of pixels
+var counts_NDWI = ndwi_MODIS.select('ndwi').count();
+var histogram_NDWI_counts = ui.Chart.image.histogram(counts_NDWI, STUDYBOUNDS, 30)
+print(histogram_NDWI_counts)
+
+  
+//Calculate median NDWI for 2018
+print("... Computing median NDWI across time")
+var median_ndwi = ndwi_MODIS.median();
+
+
+// Plot histogram of NDBI values
+print("... Plotting histogram of NDWI values")
+var cndwi= median_ndwi.clip(STUDYBOUNDS)
+var values_ndwi = cndwi.select('ndwi')
+var histogram_NDWI_pixels = ui.Chart.image.histogram(values_ndwi , STUDYBOUNDS, 30)
+print(histogram_NDWI_pixels)
+
+//// Center the map on the image.
+Map.centerObject(STUDYBOUNDS)
+
+// Display layer
+var ndwiVis = {bands: "ndwi", min: -1 , max: 1, palette: ['000033', '3333FF', 'CCFF66', 'FFFF66']}; 
+Map.addLayer(cndwi, ndwiVis, 'NDWI', DISPLAY)
+
+// Return image with median NDWI
+return median_ndwi
+}

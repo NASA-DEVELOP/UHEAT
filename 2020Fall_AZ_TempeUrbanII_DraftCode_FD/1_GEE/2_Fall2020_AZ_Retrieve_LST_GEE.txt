@@ -1,0 +1,198 @@
+exports.LST_fromLandsat8 = function(DATE_RANGE, YEAR_RANGE, STUDYBOUNDS, DISPLAY){
+ 
+ 
+/* Script: Fall2020_AZ_Retrieve_LST - Tempe Urban Development II - LST
+
+Authors: Blake Steiner, John Dialesandro, Anson Pang, and Sydney Boogaard 
+Prior Authors: Brandy Nisbet-Wilcox, Samuel Meltzer, Spencer Nelson, Charlotte Wagner
+Date: November 3, 2020
+Project: Tempe Urban Development II, Fall 2020
+Node: Arizona, Tempe
+Contact: Blake Steiner, blake.a.steiner@gmail.com
+URL: -Place custom URL here-
+
+Description: This script calculates median daytime LST across a given date range and year range.
+This script is FUNCTION and run from the main script Fall2020_AZ_TempeII_AggSatData.
+The function requires DATE_RANGE (in the form of ee.Filter.dayOfYear(start_day_of_year, end_day_of_year)) 
+YEAR_RANGE (in the form of ee.Filter.calendarRange(start_year, end_year,'year'), 
+STUDYBOUNDS (a polygon of the study area saved in Google Garth Engine Assets) and 
+DISPLAY (can be set to true or false) as inputs, which are specified in Fall2020_AZ_TempeII_AggSatData. 
+This script calculates median daytime LST across a given date range and year range and 
+and was developed to calculate LST for census tracts located in Philadelphia, Pennsylvania, US. 
+Daytime LST is calculated from bi-weekly Landsat 8 Surface Reflectance Tier 1 data at 30m resolution. 
+
+Usage: Requires access to Google Earth Engine.
+
+Parameters:
+In: DATE_RANGE
+    YEAR_RANGE
+    STUDYBOUNDS
+    DISPLAY
+Out: clipped image of median daytime LST
+
+*/
+ 
+  
+  //****************** CLOUD MASK FUNCTION *****************//
+  
+// Create a function to mask cloudy and cloud shadow pixels
+// 1 corresponds to clear
+// 3 corresponds to cloud shadow
+// 5 corresponds to cloud
+// More info on bit values for the pixel_qa band can be found at https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_LC08_C01_T1_SR
+var cloud_mask = function maskl8(i) { 
+// This reassigns cloud shadow pixels to clear pixels
+    var cloudShadowBitMask = (1 << 3); 
+// This reassigns cloud pixels are to clear pixels
+    var cloudsBitMask = (1 << 5); 
+// This reassigns water pixels are to clear pixels
+    var waterBitMask = (1 << 2);     
+// Selects the pixel_qa band and sets it to a variable
+    var qa = i.select('pixel_qa');
+// Multiplies the bits in the original pixel_qa band by the new reassigned cloud shadow transparent bits.
+    var mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0)      
+              .and(qa.bitwiseAnd(cloudsBitMask).eq(0))
+              .and(qa.bitwiseAnd(waterBitMask).eq(0));
+// The cloud cover and cloud shadow pixels now have bit values of 1 = transparent
+// Transparent pixels will  not be included in the further analysis
+    return i.updateMask(mask);                              
+}
+  
+  //**************************************************************//
+  
+  
+  
+  print("... Retrieving image collection");
+  // Filter landsat image collection by year and date ranges, and geography boundaries. Cloud mask applied to collection
+ var collection = ee.ImageCollection('LANDSAT/LC08/C01/T1_SR')
+ .filterBounds(STUDYBOUNDS) //only images within study area
+ //filter by the set variables above for day of year range and year range
+ .filter(YEAR_RANGE)
+ .filter(DATE_RANGE)
+ // use above functions to filter cloudy pixels
+  .map(cloud_mask); 
+  
+  
+  print(" ...Calculating NDVI from Bands 5 and 4")
+  // calculate ndvi
+var ndvi = collection.map(
+  function(image){
+              return image.addBands(
+                image.expression(
+                  // Compute Normalised difference vegetation index
+                  // for more information see 
+                  // https://www.usgs.gov/land-resources/nli/landsat/landsat-normalized-difference-vegetation-index?qt-science_support_page_related_con=0#qt-science_support_page_related_con
+                '(NIR - RED) / (NIR + RED)', 
+              { 
+                'NIR': image.select('B5'),
+                'RED': image.select('B4')
+              }).rename('ndvi'));
+          });
+          
+// //Calculate median NDVI for 2018
+// var median_ndvi = ndvi.median();
+// print(median_ndvi);
+
+// // display
+// var ndviVis = {bands: "ndvi", palette: ['red','yellow','green','003300']};
+// //Map.addLayer(median_ndvi, ndviVis, "ndvi - full", false);          
+
+
+print("... Scaling Band 10 (thermal)")
+// Create a function to scale Band 10 to get correct brightness temperature (was condensed for storage)
+  var scaled_B10 =  ndvi.map(function (image) {
+    var scaledB10 = image.select('B10').multiply(0.1).rename('scaled_B10');
+    //add as a new band on the image collection
+    return image.addBands(scaledB10);
+  });
+        
+//calculate median of Brightness Temperature
+// var median_B10 = scaled_B10.median(); 
+// print(median_B10);
+//display the brightness temperature
+//Map.addLayer(median_B10, {bands: "scaled_B10", min: 0, max: 150, palette: ['FF0000', '00FF00']}, "B10 - full", false);
+
+
+
+print("... Getting emissivity from NDVI")
+// calculate emissivity
+var emissivity = scaled_B10.map(function(image)
+          {
+            return image.addBands(image.select('ndvi')
+            // It looks like specific NDVI ranges have a corresponding emissivity
+            // for emissivity values and equation see
+            // https://www.researchgate.net/publication/222255366_A_C_program_for_retrieving_land_surface_temperature_from_the_data_of_Landsat_TMETM_band6/figures?lo=1
+              .where(image.select('ndvi').lt(0), 0.9925)
+              .where(image.select('ndvi').gte(0) && image.select('ndvi').lt(0.15), 0.923)
+              .where(image.select('ndvi').gt(0.727), 0.986)
+              .where(image.select('ndvi').gte(0.15) && image.select('ndvi').lt(0.727), 
+                image.expression(
+                  '1.0094 + 0.047 * log(A)',
+                    {
+                      'A' : image.select('ndvi')
+                      //returns a new band to the image collection for emissivity
+                    })).rename('emissivity'));
+          }
+          );
+
+//calculate median of emissivity image collection
+// var median_emis = emissivity.median();
+// print(median_emis);
+//add emissivity median to the map and set visual parameters
+//Map.addLayer(emissivity.median(),{bands: "emissivity", min: 0.9, max: 1, palette: ['FF0000', '00FF00']}, "emissivity - full", false);
+
+
+
+
+print("... Calculating LST from emissivity and thermal band")
+// calculate land surface temperature
+var LST = emissivity.map(function(image)
+          {
+            return image.addBands(
+              image.expression(
+                //this expresion calculates the land surface temperature in Kevlin, then converts to Farenheit
+            '(A / (1 +(0.0000109 * (A / 0.01438) * log(B)))) * (9/5) - 459.67',
+            {
+              'A' : image.select('scaled_B10'),
+              'B' : image.select('emissivity')
+              //new band for land surface temperature in Farenheit added to the collection
+            }).rename('LST'))});
+
+
+print("... Plotting histogram of number of pixels per location")
+//provides a count of LST values per pixel in the image collection          
+var counts_LST = LST.select("LST").count();
+//displays that count for our study area in histogram
+var histogram_LST = ui.Chart.image.histogram(counts_LST, STUDYBOUNDS, 30);
+print(histogram_LST);
+
+
+print("... Computing median across time")
+//calculates median LST for each pixel geography in the image collection
+var median_LST = LST.median();
+print(median_LST);
+
+// Plot a histogram of LST values
+ print("... Plotting histogram of LST values")
+ var cLST = median_LST//.clip(STUDYBOUNDS)
+ var values_LST = cLST.select('LST') 
+ var histogram_LST_values = ui.Chart.image.histogram(values_LST, STUDYBOUNDS, 30)
+ print(histogram_LST_values)
+ 
+
+// Center the map on the image.
+Map.centerObject(STUDYBOUNDS)
+
+// if set to true display data
+var blue2pink = {bands: "LST", min: 70, max: 130, palette: ['000066','FF0090', 'FF6699']}
+Map.addLayer(cLST, blue2pink, "LST", DISPLAY)
+
+
+// plot full image
+var palettes = require('users/gena/packages:palettes');
+var palette = palettes.colorbrewer.RdYlGn[9];
+Map.addLayer(median_LST, {bands: "LST", min: 70, max: 130, palette: palette}, "LST", DISPLAY)
+
+// return image of median LST
+return median_LST;
+}

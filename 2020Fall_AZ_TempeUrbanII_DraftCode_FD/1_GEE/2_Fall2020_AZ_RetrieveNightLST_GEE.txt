@@ -1,0 +1,120 @@
+exports.NightLST_fromAquaMODIS = function(DATE_RANGE, YEAR_RANGE, STUDYBOUNDS, DISPLAY){
+/* Script: Fall2020_AZ_RetrieveNightLST - Tempe Urban Development II - Night LST
+
+Authors: Blake Steiner, John Dialesandro, Anson Pang, and Sydney Boogaard 
+Prior Authors: Brandy Nisbet-Wilcox, Samuel Meltzer, Spencer Nelson, Charlotte Wagner
+Date: November 3, 2020
+Project: Tempe Urban Development II, Fall 2020
+Node: Arizona, Tempe
+Contact: Blake Steiner, blake.a.steiner@gmail.com
+URL: -Place custom URL here-
+
+Description: This script calculates median nighttime LST across a given date range and year range.
+This script is FUNCTION and run from the main script Fall2020_AZ_TempeII_AggSatData.
+The function requires DATE_RANGE (in the form of ee.Filter.dayOfYear(start_day_of_year, end_day_of_year)) 
+YEAR_RANGE (in the form of ee.Filter.calendarRange(start_year, end_year,'year'), 
+STUDYBOUNDS (a polygon of the study area saved in Google Garth Engine Assets) and 
+DISPLAY (can be set to true or false) as inputs, which are specified in Fall2020_AZ_TempeII_AggSatData. 
+This script calculates median nighttime LST across a given date range and year range and 
+and was developed to calculate nighttime LST for census tracts located in Philadelphia, Pennsylvania, US. 
+Nighttime LST is calculated from daily Aqua MODIS  Land Surface Temperature and 
+Emissivity Daily Global 1km.   
+
+Usage: Requires access to Google Earth Engine.
+
+Parameters:
+In: DATE_RANGE
+    YEAR_RANGE
+    STUDYBOUNDS
+    DISPLAY
+Out: clipped image of median nighttime LST
+
+*/
+
+
+/// QUALITY MASK ///
+var getQABits = function(image, start, end, newName) {
+    // Compute the bits we need to extract.
+    var pattern = 0;
+    for (var i = start; i <= end; i++) {
+      pattern += Math.pow(2, i);
+    }
+    // Return a single band image of the extracted QA bits, giving the band
+    // a new name.
+    return image.select([0], [newName])
+                  .bitwiseAnd(pattern)
+                  .rightShift(start);
+};
+
+// --- Mask out cloudy pixels - cloud state  from state QA band (bits 3 and 4)
+var maskQA= function(image) {
+  // Select the QA band.
+  var QA = image.select('QC_Night');
+  // Get the internal_cloud_algorithm_flag bit.
+  var cloud = getQABits(QA, 0,1, 'QC_state')
+              .expression("b(0) == 3 || b(0) == 2");
+  var error = getQABits(QA, 6, 7, 'T_err')
+              .expression(" b(0) == 3");
+  // Return an image masking out cloudy and low quality areas
+  image = image.updateMask(error.not());
+  return image.updateMask(cloud.not());
+};
+
+
+
+
+/// RETRIEVING DATA ///
+  print("... Retrieving image collection");
+  // Filter landsat image collection by year and date ranges, and geography boundaries. Cloud mask applied to collection
+  var collection = ee.ImageCollection("MODIS/006/MYD11A1")
+ //filter by the set variables above for day of year range and year range
+ .filter(DATE_RANGE)
+ .filter(YEAR_RANGE)
+ // use above functions to filter cloudy pixels
+  .map(maskQA); 
+print(collection)
+//// TRANSFORMING NIGHT LST TO FARENHEIT AND RESCALING
+
+var NightLST_F = collection.map(function(image)
+                {
+                  return image.addBands(
+                    image.expression(
+                '(A * 0.02) * (9/5) - 459.67',
+                {
+                  'A' : image.select('LST_Night_1km')
+                }).rename('LSTN_F'))});
+
+
+print("... Plotting histogram of number of pixels per location")
+//provides a count of LST values per pixel in the image collection          
+var counts_LSTN = NightLST_F.select("LSTN_F").count();
+//displays that count for our study area in histogram
+var histogram_LSTN = ui.Chart.image.histogram(counts_LSTN, STUDYBOUNDS, 1000);
+print(histogram_LSTN);
+
+
+
+print("... Computing median across time")
+//calculates median LST for each pixel geography in the image collection
+var median_LSTN = NightLST_F.median();
+print(median_LSTN);
+
+// Plot a histogram of LST values
+ print("... Plotting histogram of LST values")
+ var cLSTN = median_LSTN.clip(STUDYBOUNDS)
+ var values_LSTN = cLSTN.select("LSTN_F") 
+ var histogram_LSTN_values = ui.Chart.image.histogram(values_LSTN, STUDYBOUNDS, 1000)
+ print(histogram_LSTN_values)
+ 
+ 
+ // Center the map on the image.
+Map.centerObject(STUDYBOUNDS)
+
+// if set to true display data
+var palettes = require('users/gena/packages:palettes');
+var inferno = palettes.matplotlib.inferno[7].slice(1,7);
+
+Map.addLayer(cLSTN, {bands: "LSTN_F", min: 57, max: 78, palette: inferno}, "Night LST", DISPLAY)
+
+return median_LSTN
+}
